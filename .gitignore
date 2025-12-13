@@ -1,0 +1,40 @@
+# --- Python Basics ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Environments ---
+env/
+venv/
+.venv/
+.env
+
+# --- IDE Settings ---
+.vscode/
+.idea/
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints/
+
+# --- Model Artifacts & Outputs ---
+output/
+
+# Логи тренування PyTorch Lightning
+lightning_logs/
+wandb/
+
+# Окремі файли ваг, якщо вони опиняться в корені
+*.ckpt
+*.pth
+*.bin
+*.safetensors
+
+# --- Submission Files ---
+# Файли результатів
+submission.csv
+best_threshold.txt
+
+# --- System Files ---
+.DS_Store
+Thumbs.db
