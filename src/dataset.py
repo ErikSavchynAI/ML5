@@ -10,9 +10,6 @@ class MilitaryDataset(Dataset):
         self.tokenizer = tokenizer
         self.is_train = is_train
 
-        # Для LLM важливо форматувати промпт правильно, але
-        # для SequenceClassification ми просто даємо текст.
-        # Можна спробувати додати інструкцію, але поки залишимо "сирий" текст з каналом.
         self.texts = [
             f"Channel: {row['channel_name']} | {row['cleaned_message']}"
             for _, row in df.iterrows()

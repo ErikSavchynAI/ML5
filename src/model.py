@@ -15,18 +15,15 @@ class MilitaryModel(pl.LightningModule):
 
         # Конфігурація моделі для класифікації (1 мітка)
         self.config = AutoConfig.from_pretrained(Config.MODEL_NAME)
-        self.config.num_labels = 1
-        # Важливо для Qwen/Llama: вказати pad_token_id, інакше впаде
-        # Qwen не має дефолтного pad_token, беремо eos_token
-        self.config.pad_token_id = 151643  # Це EOS токен Qwen2.5
+        self.config.output_hidden_states = True
+        self.backbone = AutoModel.from_pretrained(Config.MODEL_NAME, config=self.config)
 
-        # Завантажуємо монстра
-        # trust_remote_code=True іноді треба, але для Qwen2.5 вже є підтримка в transformers
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            Config.MODEL_NAME,
-            config=self.config,
-            torch_dtype=torch.bfloat16,  # Вантажимо одразу в bf16 для економії
-            attn_implementation="sdpa",
+        self.fc = nn.Sequential(
+            nn.Linear(self.config.hidden_size, 1024),
+            nn.LayerNorm(1024),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(1024, 1)
         )
 
         # Налаштування LoRA
@@ -55,10 +52,18 @@ class MilitaryModel(pl.LightningModule):
         self.criterion = nn.BCEWithLogitsLoss()
         self.steps_per_epoch = steps_per_epoch
 
+    def feature_pooling(self, last_hidden_state, attention_mask):
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+        sum_embeddings = torch.sum(last_hidden_state * input_mask_expanded, 1)
+        sum_mask = input_mask_expanded.sum(1)
+        sum_mask = torch.clamp(sum_mask, min=1e-9)
+        return sum_embeddings / sum_mask
+
     def forward(self, input_ids, attention_mask):
-        # LLM повертає об'єкт SequenceClassifierOutput
-        output = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        return output.logits.squeeze(-1)
+        outputs = self.backbone(input_ids, attention_mask)
+        embeddings = self.feature_pooling(outputs.last_hidden_state, attention_mask)
+        logits = self.fc(embeddings)
+        return logits.squeeze(-1)
 
     def training_step(self, batch, batch_idx):
         input_ids = batch["input_ids"]
@@ -79,12 +84,16 @@ class MilitaryModel(pl.LightningModule):
         logits = self(input_ids, attention_mask)
         loss = self.criterion(logits, labels)
 
-        self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True)
+
+        preds = torch.sigmoid(logits).float().cpu().numpy()
+        labels = labels.cpu().numpy()
 
         preds = torch.sigmoid(logits).float().cpu().numpy()
         labels = labels.float().cpu().numpy()
 
-        return {"val_loss": loss, "preds": preds, "labels": labels}
+    def on_validation_epoch_end(self):
+        pass
 
     def configure_optimizers(self):
         # Для LoRA тренуємо тільки адаптери, тому беремо parameters() від self.model

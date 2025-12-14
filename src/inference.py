@@ -15,7 +15,6 @@ def run_inference():
     tokenizer = AutoTokenizer.from_pretrained(Config.MODEL_NAME)
     test_loader = get_dataloader(test_df, tokenizer, is_train=False, shuffle=False)
 
-    # Читаємо кращий поріг
     try:
         with open(f"{Config.OUTPUT_DIR}/best_threshold.txt", "r") as f:
             best_th = float(f.read().strip())
@@ -25,9 +24,11 @@ def run_inference():
 
     fold_preds = []
 
-    # Проганяємо через усі 5 фолдів
     for fold in range(Config.N_FOLDS):
-        fold_dir = f"{Config.OUTPUT_DIR}/fold_{fold}/adapter_model"
+        fold_dir = f"{Config.OUTPUT_DIR}/fold_{fold}"
+        ckpt_files = [f for f in os.listdir(fold_dir) if f.endswith('.ckpt')]
+        if not ckpt_files:
+            continue
 
         base_model = AutoModelForSequenceClassification.from_pretrained(
             Config.MODEL_NAME,
@@ -55,11 +56,9 @@ def run_inference():
         del model
         torch.cuda.empty_cache()
 
-    # Ансамбль (середнє арифметичне)
     avg_preds = np.mean(fold_preds, axis=0)
     final_labels = (avg_preds > best_th).astype(int)
 
-    # Збереження
     submission = pd.read_csv("./input/sample_submission.csv")
     submission["new_label"] = final_labels
     submission.to_csv("submission.csv", index=False)

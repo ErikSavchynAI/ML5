@@ -40,9 +40,7 @@ def run_training():
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    skf = StratifiedKFold(
-        n_splits=Config.N_FOLDS, shuffle=True, random_state=Config.SEED
-    )
+    skf = StratifiedKFold(n_splits=Config.N_FOLDS, shuffle=True, random_state=Config.SEED)
 
     oof_preds = np.zeros(len(df))
 
@@ -58,8 +56,14 @@ def run_training():
         steps_per_epoch = len(train_loader)
         model = MilitaryModel(steps_per_epoch=steps_per_epoch)
 
-        # ВИКОРИСТОВУЄМО НАШ CALLBACK
-        peft_saver = SavePeftModelCallback()
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=f"{Config.OUTPUT_DIR}/fold_{fold}",
+            filename='best_model',
+            save_top_k=1,
+            verbose=True,
+            monitor='val_loss',
+            mode='min'
+        )
 
         trainer = pl.Trainer(
             max_epochs=Config.EPOCHS,
@@ -69,16 +73,15 @@ def run_training():
             accumulate_grad_batches=Config.GRAD_ACCUM,
             callbacks=[peft_saver],  # Ніяких ModelCheckpoint, тільки наш saver
             enable_progress_bar=True,
-            val_check_interval=0.5,
-            default_root_dir=f"{Config.OUTPUT_DIR}/fold_{fold}",  # Сюди впадуть адаптери
+            val_check_interval=0.5
         )
 
         trainer.fit(model, train_loader, val_loader)
 
-        # --- ІНФЕРЕНС OOF ---
-        # Оскільки ми не зберігали .ckpt, модель в пам'яті - це остання версія.
-        # Для LLM це ок (вона не перенавчається так жорстко за 2 епохи).
-
+        best_model_path = checkpoint_callback.best_model_path
+        print(f"Loading best model from {best_model_path}")
+        model = MilitaryModel.load_from_checkpoint(best_model_path)
+        model.to(Config.DEVICE)
         model.eval()
         model.to(Config.DEVICE)
 
@@ -93,11 +96,10 @@ def run_training():
 
         oof_preds[val_idx] = np.array(val_preds)
 
-        del model, trainer
+        del model, trainer, train_loader, val_loader
         torch.cuda.empty_cache()
         gc.collect()
 
-    # Підрахунок метрик
     best_f1 = 0
     best_th = 0.5
     for th in np.arange(0.1, 0.9, 0.01):
