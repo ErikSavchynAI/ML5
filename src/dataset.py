@@ -10,15 +10,16 @@ class MilitaryDataset(Dataset):
         self.tokenizer = tokenizer
         self.is_train = is_train
 
-        # ХАК: Додаємо контекст каналу
-        # Модель вивчить репутацію джерела
+        # Для LLM важливо форматувати промпт правильно, але
+        # для SequenceClassification ми просто даємо текст.
+        # Можна спробувати додати інструкцію, але поки залишимо "сирий" текст з каналом.
         self.texts = [
             f"Channel: {row['channel_name']} | {row['cleaned_message']}"
             for _, row in df.iterrows()
         ]
 
         if self.is_train:
-            self.labels = df['new_label'].values
+            self.labels = df["new_label"].values
 
     def __len__(self):
         return len(self.texts)
@@ -34,26 +35,31 @@ class MilitaryDataset(Dataset):
             padding="max_length",
             truncation=True,
             return_attention_mask=True,
-            return_tensors='pt',
+            return_tensors="pt",
         )
 
         sample = {
-            'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten()
+            "input_ids": encoding["input_ids"].flatten(),
+            "attention_mask": encoding["attention_mask"].flatten(),
         }
 
         if self.is_train:
-            sample['labels'] = torch.tensor(self.labels[item], dtype=torch.float)
+            sample["labels"] = torch.tensor(self.labels[item], dtype=torch.float)
 
         return sample
 
 
 def get_dataloader(df, tokenizer, is_train=True, shuffle=False):
+    # ВАЖЛИВО ДЛЯ LLM: встановлюємо pad_token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     ds = MilitaryDataset(df, tokenizer, is_train)
+
     return DataLoader(
         ds,
         batch_size=Config.BATCH_SIZE,
         num_workers=Config.NUM_WORKERS,
         shuffle=shuffle,
-        pin_memory=True
+        pin_memory=True,
     )
