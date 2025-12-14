@@ -14,14 +14,12 @@ from .model import MilitaryModel
 
 
 def run_training():
-    # Завантаження даних
     df = pd.read_csv(Config.TRAIN_PATH)
     tokenizer = AutoTokenizer.from_pretrained(Config.MODEL_NAME)
 
-    # Stratified K-Fold
     skf = StratifiedKFold(n_splits=Config.N_FOLDS, shuffle=True, random_state=Config.SEED)
 
-    oof_preds = np.zeros(len(df))  # Out-of-fold predictions
+    oof_preds = np.zeros(len(df))
 
     for fold, (train_idx, val_idx) in enumerate(skf.split(df, df['new_label'])):
         print(f"\n{'=' * 20} FOLD {fold + 1}/{Config.N_FOLDS} {'=' * 20}")
@@ -32,11 +30,9 @@ def run_training():
         train_loader = get_dataloader(train_df, tokenizer, is_train=True, shuffle=True)
         val_loader = get_dataloader(val_df, tokenizer, is_train=True, shuffle=False)
 
-        # Ініціалізація моделі
         steps_per_epoch = len(train_loader)
         model = MilitaryModel(steps_per_epoch=steps_per_epoch)
 
-        # Callbacks
         checkpoint_callback = ModelCheckpoint(
             dirpath=f"{Config.OUTPUT_DIR}/fold_{fold}",
             filename='best_model',
@@ -46,47 +42,40 @@ def run_training():
             mode='min'
         )
 
-        # Тренер
         trainer = pl.Trainer(
             max_epochs=Config.EPOCHS,
             accelerator='gpu',
             devices=1,
-            precision=Config.PRECISION,  # bf16-mixed для H100
+            precision=Config.PRECISION,
             accumulate_grad_batches=Config.GRAD_ACCUM,
             callbacks=[checkpoint_callback],
             enable_progress_bar=True,
-            val_check_interval=0.5  # Перевіряти валідацію двічі на епоху
+            val_check_interval=0.5
         )
 
-        # Start training
         trainer.fit(model, train_loader, val_loader)
 
-        # Load best model for validation logic
         best_model_path = checkpoint_callback.best_model_path
         print(f"Loading best model from {best_model_path}")
         model = MilitaryModel.load_from_checkpoint(best_model_path)
         model.to(Config.DEVICE)
         model.eval()
 
-        # Валідація OOF (Out Of Fold)
         val_preds = []
         with torch.no_grad():
             for batch in val_loader:
                 input_ids = batch['input_ids'].to(Config.DEVICE)
                 attention_mask = batch['attention_mask'].to(Config.DEVICE)
                 logits = model(input_ids, attention_mask)
-                preds = torch.sigmoid(logits).cpu().numpy()
+                preds = torch.sigmoid(logits).float().cpu().numpy()
                 val_preds.extend(preds)
 
         oof_preds[val_idx] = np.array(val_preds)
 
-        # Очистка пам'яті
         del model, trainer, train_loader, val_loader
         torch.cuda.empty_cache()
         gc.collect()
 
-    # Загальний скор
-    # Шукаємо кращий поріг
     best_f1 = 0
     best_th = 0.5
     for th in np.arange(0.3, 0.7, 0.01):
@@ -101,7 +90,6 @@ def run_training():
     print(f"CV Accuracy: {acc:.4f}")
     print(f"{'=' * 40}")
 
-    # Зберігаємо кращий поріг для інференсу
     with open(f"{Config.OUTPUT_DIR}/best_threshold.txt", "w") as f:
         f.write(str(best_th))
 

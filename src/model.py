@@ -17,12 +17,11 @@ class MilitaryModel(pl.LightningModule):
         self.config.output_hidden_states = True
         self.backbone = AutoModel.from_pretrained(Config.MODEL_NAME, config=self.config)
 
-        # Mean Pooling + Classification Head
         self.fc = nn.Sequential(
             nn.Linear(self.config.hidden_size, 1024),
             nn.LayerNorm(1024),
             nn.GELU(),
-            nn.Dropout(0.2),  # Дропаут проти оверфіту
+            nn.Dropout(0.2),
             nn.Linear(1024, 1)
         )
 
@@ -30,7 +29,6 @@ class MilitaryModel(pl.LightningModule):
         self.steps_per_epoch = steps_per_epoch
 
     def feature_pooling(self, last_hidden_state, attention_mask):
-        # Mean Pooling замість [CLS] токена дає кращий контекст
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
         sum_embeddings = torch.sum(last_hidden_state * input_mask_expanded, 1)
         sum_mask = input_mask_expanded.sum(1)
@@ -39,9 +37,7 @@ class MilitaryModel(pl.LightningModule):
 
     def forward(self, input_ids, attention_mask):
         outputs = self.backbone(input_ids, attention_mask)
-        # Витягуємо вектор
         embeddings = self.feature_pooling(outputs.last_hidden_state, attention_mask)
-        # Класифікуємо
         logits = self.fc(embeddings)
         return logits.squeeze(-1)
 
@@ -64,19 +60,15 @@ class MilitaryModel(pl.LightningModule):
         logits = self(input_ids, attention_mask)
         loss = self.criterion(logits, labels)
 
-        # Для метрик
-        preds = torch.sigmoid(logits).cpu().numpy()
+        self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True)
+
+        preds = torch.sigmoid(logits).float().cpu().numpy()
         labels = labels.cpu().numpy()
 
         return {'val_loss': loss, 'preds': preds, 'labels': labels}
 
     def on_validation_epoch_end(self):
-        # Lightning автоматично збирає outputs з validation_step
-        # Але в нових версіях треба робити це через self.validation_step_outputs якщо зберігали
-        # Для простоти тут ми розраховуємо на логи, але для F1 треба зібрати все
         pass
-        # Примітка: для точного F1 краще використовувати TorchMetrics,
-        # але тут залишимо простий лосс для моніторингу, бо F1 порахуємо в train.py
 
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=Config.LR, weight_decay=Config.WEIGHT_DECAY)

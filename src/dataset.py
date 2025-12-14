@@ -10,8 +10,6 @@ class MilitaryDataset(Dataset):
         self.tokenizer = tokenizer
         self.is_train = is_train
 
-        # ХАК: Додаємо контекст каналу
-        # Модель вивчить репутацію джерела
         self.texts = [
             f"Channel: {row['channel_name']} | {row['cleaned_message']}"
             for _, row in df.iterrows()
