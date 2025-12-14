@@ -18,7 +18,7 @@ class Config:
 
     LR = 1e-5
     WEIGHT_DECAY = 0.01
-    WARMUP_RATIO = 0.1
+    WARMUP_RATIO = 0.05
 
     NUM_WORKERS = 8
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

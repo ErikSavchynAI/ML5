@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
-from transformers import AutoModel, AutoConfig
+from transformers import AutoModelForSequenceClassification, AutoConfig, AutoTokenizer
 import pytorch_lightning as pl
 from torch.optim import AdamW
 from transformers import get_cosine_schedule_with_warmup
-from sklearn.metrics import f1_score
+from peft import get_peft_model, LoraConfig, TaskType
 from .config import Config
 
 
@@ -13,6 +13,7 @@ class MilitaryModel(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
+        # Конфігурація моделі для класифікації (1 мітка)
         self.config = AutoConfig.from_pretrained(Config.MODEL_NAME)
         self.config.output_hidden_states = True
         self.backbone = AutoModel.from_pretrained(Config.MODEL_NAME, config=self.config)
@@ -24,6 +25,29 @@ class MilitaryModel(pl.LightningModule):
             nn.Dropout(0.2),
             nn.Linear(1024, 1)
         )
+
+        # Налаштування LoRA
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            inference_mode=False,
+            r=16,  # Ранг адаптерів (чим більше, тим розумніше, але довше)
+            lora_alpha=32,  # r * 2
+            lora_dropout=0.05,
+            # Цільові модулі для Qwen (Attention шари)
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
+        )
+
+        # Загортаємо модель в LoRA
+        self.model = get_peft_model(self.model, peft_config)
+        self.model.print_trainable_parameters()  # Подивись в логах, скільки % тренується
 
         self.criterion = nn.BCEWithLogitsLoss()
         self.steps_per_epoch = steps_per_epoch
@@ -42,20 +66,20 @@ class MilitaryModel(pl.LightningModule):
         return logits.squeeze(-1)
 
     def training_step(self, batch, batch_idx):
-        input_ids = batch['input_ids']
-        attention_mask = batch['attention_mask']
-        labels = batch['labels']
+        input_ids = batch["input_ids"]
+        attention_mask = batch["attention_mask"]
+        labels = batch["labels"]
 
         logits = self(input_ids, attention_mask)
         loss = self.criterion(logits, labels)
 
-        self.log('train_loss', loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        input_ids = batch['input_ids']
-        attention_mask = batch['attention_mask']
-        labels = batch['labels']
+        input_ids = batch["input_ids"]
+        attention_mask = batch["attention_mask"]
+        labels = batch["labels"]
 
         logits = self(input_ids, attention_mask)
         loss = self.criterion(logits, labels)
@@ -65,18 +89,24 @@ class MilitaryModel(pl.LightningModule):
         preds = torch.sigmoid(logits).float().cpu().numpy()
         labels = labels.cpu().numpy()
 
-        return {'val_loss': loss, 'preds': preds, 'labels': labels}
+        preds = torch.sigmoid(logits).float().cpu().numpy()
+        labels = labels.float().cpu().numpy()
 
     def on_validation_epoch_end(self):
         pass
 
     def configure_optimizers(self):
-        optimizer = AdamW(self.parameters(), lr=Config.LR, weight_decay=Config.WEIGHT_DECAY)
+        # Для LoRA тренуємо тільки адаптери, тому беремо parameters() від self.model
+        optimizer = AdamW(
+            self.model.parameters(), lr=Config.LR, weight_decay=Config.WEIGHT_DECAY
+        )
 
         scheduler = get_cosine_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=int(self.steps_per_epoch * Config.EPOCHS * Config.WARMUP_RATIO),
-            num_training_steps=self.steps_per_epoch * Config.EPOCHS
+            num_warmup_steps=int(
+                self.steps_per_epoch * Config.EPOCHS * Config.WARMUP_RATIO
+            ),
+            num_training_steps=self.steps_per_epoch * Config.EPOCHS,
         )
 
-        return [optimizer], [{'scheduler': scheduler, 'interval': 'step'}]
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
